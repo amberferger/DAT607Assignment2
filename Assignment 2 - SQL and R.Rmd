@@ -1,0 +1,200 @@
+---
+title: "Assignment 2 - SQL and R"
+author: "Amber Ferger"
+date: "9/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Assignment
+
+**Choose six recent popular movies. Ask at least five people that you know (friends, family, classmates,
+imaginary friends) to rate each of these movie that they have seen on a scale of 1 to 5. Take the results
+(observations) and store them in a SQL database. Load the information into an R dataframe. Your deliverables should include your SQL scripts and your R Markdown code, posted to GitHub.**
+
+
+## Loading Libraries
+
+```{r libraries, eval=TRUE, message = FALSE}
+library(RMySQL)
+library(sqldf)
+library(ggplot2)
+library(dplyr)
+library(plyr)
+```
+
+
+## Movie Data
+
+For this project, I created a google form and posted it on social media for people to fill out. I did a bit of manipulation on the final output so that each record in the dataset represents 1 movie rating for 1 person. The output of the RATING is text, so I will use a case statement in my query to convert this field to a numeric data type. Let's load it in now:
+
+```{r publicConnection, eval = FALSE}
+mydb = dbConnect(MySQL(), user='root', password='password', dbname='dbName', host='localhost')
+```
+
+``` {r loadData, eval = TRUE}
+movieRatings <- dbGetQuery(mydb, "
+                           SELECT 
+                             USER_ID, 
+                             AGE, 
+                             GENDER, 
+                             MOVIE, 
+                             CASE   WHEN RATING LIKE '5%' THEN 5
+                                    WHEN RATING LIKE '4%' THEN 4
+                                    WHEN RATING LIKE '3%' THEN 3
+                                    WHEN RATING LIKE '2%' THEN 2
+                                    WHEN RATING LIKE '1%' THEN 1
+                                    WHEN RATING LIKE 'Not%' THEN 0
+                            ELSE 0 END AS RATING
+                          FROM hw.DATA607_01_MOVIES")
+```
+
+Now that we have the data loaded, let's take a look at it.
+
+``` {r dimensions, eval = TRUE}
+
+dim(movieRatings)
+colnames(movieRatings)
+str(movieRatings)
+```
+
+We have 504 records in the data set with a total of 5 columns. 
+
+1. **USER_ID:** A unique ID assigned to each individual that filled out the survey; I got a total of 84 responses in all!
+2. **AGE:** The age of the individual
+3. **GENDER:** The gender of the individual (Male, Female, or Other)
+4. **MOVIE:** The movie to rank
+5. **RATING:** Rating of the movie on a scale of 1 - 5, with 1 being the worst and 5 being the best; Null values mean that the individual did not provide a rating and 0 means that the individual selected "Not Seen" as their response
+
+***Note that there are also nulls in the Age and Gender columns -- some of these are from individuals not answering while others are a result of how I collected the data; I originally posted the survey without the Age and Gender questions and added them later on.*** 
+
+## Analysis
+
+Now that we've taken a look at the structure, let's dig a little deeper into the actual data. First, let's look at the demographics of the people responding to the questions. In order to do so, we need to get a distinct list of individuals with their age and gender. We'll also go ahead and change the null values in our data set to Unknown so that we can take them into account as well. 
+``` {r gender, eval = TRUE}
+
+demoInfo <- unique(movieRatings[,1:3])
+
+demoInfo[is.na(demoInfo)] <- "UNKNOWN"
+
+
+demoPlot <- barplot(table(demoInfo$GENDER), main = "Survey Participants by Gender",
+        xlab= "Gender", col = c("pink", "lightblue", "lightyellow"),
+        legend = rownames(table(demoInfo$GENDER)), ylim=c(0,45))
+
+text(x=demoPlot, y= table(demoInfo$GENDER)+2, labels=as.character(table(demoInfo$GENDER)))
+
+```
+
+For known survey participants, about 58% were female, and 42% were male. 
+
+Now let's take a look at the age distribution. We will remove the unknowns from this graph
+
+``` {r age, eval = TRUE}
+
+barplot(table(demoInfo$AGE[which(demoInfo$AGE != "UNKNOWN")]), main = "Number of Survey Participants by Age", xlab= "Age",ylim=c(0,9))
+```
+
+When we exclude the unknown ages, we can see that the majority of the survey participants fall between the ages of 23 and 30, with the most frequent age being 27. Now let's switch gears a bit and focus on the movie ratings. First, let's look at the average rating per movie, excluding the records that weren't seen.
+
+``` {r demoCounts, eval=TRUE}
+
+movieSubset <- movieRatings[which(movieRatings$RATING !=0),]
+
+
+avgRatings <- as.data.frame(aggregate(movieSubset$RATING, list(movieSubset$MOVIE), FUN=mean))
+colnames(avgRatings) <- c("MOVIE", "AVG_RATING")
+avgRatings$AVG_RATING <- round(avgRatings$AVG_RATING,2)
+
+avgRatings$MOVIE <- with(avgRatings, reorder(MOVIE, -AVG_RATING))
+g <- ggplot(avgRatings, 
+            aes(x = MOVIE, y = AVG_RATING, color = MOVIE, fill = MOVIE, label = AVG_RATING)) +
+  geom_col() +
+  geom_text(nudge_y = 0.5) + 
+  ggtitle("Average Rating by Movie") + 
+  xlab("Movie") + ylab("Average Movie Rating") +
+  theme_bw() + theme(legend.position = "none") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+g + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+```
+
+Looks like Avengers had the highest movie rating from people that had seen it! What about the gender split for each of these movies?
+
+
+``` {r subset, eval=TRUE}
+
+movieSubset2 <- movieSubset[which(movieSubset$GENDER=='Female'),]
+movieSubset3 <- movieSubset[which(movieSubset$GENDER=='Male'),]
+
+femaleRatings <- as.data.frame(aggregate(movieSubset2$RATING, list(movieSubset2$MOVIE), FUN=mean))
+colnames(femaleRatings) <- c("MOVIE", "AVG_RATING")
+femaleRatings$GENDER <- 'Female'
+
+maleRatings <- as.data.frame(aggregate(movieSubset3$RATING, list(movieSubset3$MOVIE), FUN=mean))
+colnames(maleRatings) <- c("MOVIE", "AVG_RATING")
+maleRatings$GENDER <- 'Male'
+
+finalRatings <- rbind(femaleRatings, maleRatings)
+finalRatings$AVG_RATING <- round(finalRatings$AVG_RATING,2)
+
+
+finalRatings$MOVIE <- with(finalRatings, reorder(MOVIE, -AVG_RATING))
+
+h <- ggplot(finalRatings, 
+            aes(x = MOVIE, y = AVG_RATING, fill = GENDER, label = AVG_RATING)) +
+  geom_bar(stat="identity", position = "dodge") + 
+  ggtitle("Average Rating by Movie") + 
+  xlab("Movie") + ylab("Average Movie Rating") +
+  theme_bw() + theme(legend.position = "none") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+h + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+
+```
+
+We can see that on average, females tended to rank the movies a bit higher than males (with the exception of Avengers).
+
+Lastly, let's take a look at the movies that people did not see. 
+
+``` {r moviesNotSeen, eval = TRUE}
+
+notSeen <- movieRatings[which(movieRatings$RATING== 0),]
+notSeen2 <- as.data.frame(table(notSeen$MOVIE, notSeen$GENDER))
+colnames(notSeen2) <- c('MOVIE', 'GENDER', 'FREQUENCY')
+
+notSeen2$MOVIE <- with(notSeen2, reorder(MOVIE, -FREQUENCY))
+i <- ggplot(notSeen2, 
+            aes(x = MOVIE, y = FREQUENCY, fill = GENDER, label = FREQUENCY)) +
+  geom_bar(stat="identity", position = "dodge") + 
+  ggtitle("Number of Indivdiduals that have not seen each Movie") + 
+  xlab("Movie") + ylab("Number of Individuals") +
+  theme_bw() + theme(legend.position = "none") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+i + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+```
+
+We can see that the top 2 movies that people haven't seen are Isn't It Romantic and Fighting with my Family. I would expect more females than males to have not seen these movies simply due to the fact that there are more females than males in the sample, but it is curious to note that despite this, more males than females had not seen Aladdin and The Lion King (both Disney movies).
+
+
+## Conclusion
+
+Altogether, this data shows us a few of things:
+
+1. More females than males filled out this survey. This could be a result of my social media network, but it is interesting to note that there is a significant difference in this particular feature. 
+2. The most participants were between the ages of 23 - 30, with a the highest frequency at age 27. Once again, this is likely a result of my social media network. 
+3. Avengers: Endgame was ranked the highest out of all the movies, and Fighting with my Family was ranked the lowest. 
+4. On average, females tended to rank movies higher than males (with the exception of Avengers: Endgame).
+5. Isn't it Rmantic and Fighting with my Family both had the highest number of "Not Seen" ratings in the data set.
+
+
